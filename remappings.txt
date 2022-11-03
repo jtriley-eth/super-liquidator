@@ -1,1 +1,3 @@
 forge-std/=lib/forge-std/src/
+huff-runner/=lib/huff-runner/src/
+sf/=node_modules/@superfluid-finance/ethereum-contracts/contracts/

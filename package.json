@@ -1,0 +1,10 @@
+{
+  "name": "super-liquidator",
+  "version": "1.0.0",
+  "main": "index.js",
+  "author": "Joshua Trujillo <Jtriley15@gmail.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "@superfluid-finance/ethereum-contracts": "^1.4.2"
+  }
+}

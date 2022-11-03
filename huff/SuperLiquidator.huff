@@ -50,7 +50,7 @@
 // -----------------------------------------------------------------------------
 // ABI
 
-#define function deleteFlows(address, address, address, address[], address[]) external returns ()
+#define function deleteFlows(address, address, address, address[], address[]) payable returns ()
 
 // -----------------------------------------------------------------------------
 // CONSTANTS
@@ -60,6 +60,7 @@
 #define constant ONE = 0x01
 #define constant ONE_WORD_SIZE = 0x20
 #define constant TWO_WORD_SIZE = 0x40
+#define constant FOUR_WORD_SIZE = 0x80
 
 // selectors
 #define constant CALL_AGREEMENT = 0x39255d5b00000000000000000000000000000000000000000000000000000000
@@ -86,11 +87,12 @@
 #define constant LIQ_RECEIVER_PTR = 0xc8
 #define constant LIQ_CTX_OFFSET_PTR = 0xe8
 #define constant LIQ_CTX_PLACEHOLDER_LEN_PTR = 0x0108
-#define constant LIQ_USER_DATA_LEN_PTR = 0x0128
+#define constant LIQ_MEM_EXPANSION = 0x0164
 
-#define constant LIQ_AGREEMENT_DATA_LEN = 0x84
-
-#define constant LIQ_ARGS_SIZE = 0x148
+#define constant LIQ_AGREEMENT_DATA_OFFSET = 0x60
+#define constant LIQ_USER_DATA_OFFSET = 0x140
+#define constant LIQ_AGREEMENT_DATA_LEN = 0xa4
+#define constant LIQ_ARGS_SIZE = 0x0168
 
 // balanceOf memory pointers
 #define constant BAL_BALANCE_OF_PTR = 0x00
@@ -103,50 +105,63 @@
 // transfer memory pointers
 #define constant TRA_TRANSFER_PTR = 0x00
 #define constant TRA_RECEIVER_PTR = 0x04
-#define constnat TRA_ARGS_PTR = 0x00
+#define constant TRA_ARGS_PTR = 0x00
 #define constant TRA_ARGS_SIZE = 0x44
 
 // -----------------------------------------------------------------------------
 // MACROS
 
-#define macro LIQUIDATION_ALLOC = takes (0) returns (0) {
+#define macro LIQUIDATION_ALLOC() = takes (0) returns (0) {
+    // store callAgreement selector
     [CALL_AGREEMENT]                // [selector]
     [LIQ_CALL_AGREEMENT_PTR]        // [ptr, selector]
     mstore                          // []
 
+    // store cfa
     [CD_CFA_PTR]                    // [cd_cfa_offset]
     calldataload                    // [cfa]
     [LIQ_CFA_PTR]                   // [ptr, cfa]
     mstore                          // []
 
-    [LIQ_AGREEMENT_DATA_LEN_PTR]    // [agreement_data_start]
+    // store agreement data ptr
+    [LIQ_AGREEMENT_DATA_OFFSET]     // [agreement_data_start]
     [LIQ_AGREEMENT_DATA_OFFSET_PTR] // [ptr, agreement_data_start]
     mstore                          // []
 
-    [LIQ_USER_DATA_LEN_PTR]         // [user_data_start]
+    // store user data ptr
+    [LIQ_USER_DATA_OFFSET]          // [user_data_start]
     [LIQ_USER_DATA_OFFSET_PTR]      // [ptr, user_data_start]
     mstore                          // []
 
+    // store agreement data length
     [LIQ_AGREEMENT_DATA_LEN]        // [agreement_data_len]
     [LIQ_AGREEMENT_DATA_LEN_PTR]    // [ptr, agreement_data_len]
     mstore                          // []
 
+    // store delete flow selector
     [DELETE_FLOW]                   // [selector]
     [LIQ_DELETE_FLOW_PTR]           // [ptr, selector]
+    mstore                          // []
+
+    // store token address
+    [CD_SUPER_TOKEN_PTR]            // [cd_super_token_ptr]
+    calldataload                    // [super_token]
+    [LIQ_SUPER_TOKEN_PTR]           // [ptr, super_token]
     mstore                          // []
 
     // we omit the sender and receiver slots for now.
     // these change on each iteration, therefore cannot be cached.
 
-    [ONE_WORD_SIZE]                 // [word_size]
-    [LIQ_CTX_OFFSET_PTR]            // [ptr, word_size]
+    // store ctx offset. i have no idea why it's 0x80.
+    [FOUR_WORD_SIZE]                // [four_word_size]
+    [LIQ_CTX_OFFSET_PTR]            // [ptr, four_word_size]
     mstore                          // []
 
     // we probably don't need this. `mload` will expand memory, so this ensures
     // memory is expanded to the proper length. this saves `mstore` calls that
     // just store zero. dumb optimization and might be able to remove but ya
     // know.. yolo.
-    [LIQ_USER_DATA_LEN_PTR]
+    [LIQ_MEM_EXPANSION]
     mload
     pop
 }
@@ -177,17 +192,19 @@
 
 #define macro INIT_ITERATORS() = takes (0) returns (3) {
     // get iterator to decrement
-    [CD_ARRAY_LEN_PTR]          // [senders_len_ptr]
+    [CD_SENDERS_ARRAY_LEN_PTR]  // [senders_len_ptr]
     calldataload                // [senders_len]
 
     // get senders array start
-    [CD_SENDER_ARRAY_START_PTR]    // [senders_start, senders_len]
+    [CD_SENDER_ARRAY_START_PTR] // [senders_start, senders_len]
 
     // get receivers arary start
     dup1                        // [senders_start, senders_start, senders_len]
     dup3                        // [senders_len, senders_start, senders_start, senders_len]
     [ONE_WORD_SIZE]             // [word_size, senders_len, senders_start, senders_start, senders_len]
-    mul                         // [senders_word_len, senders_start, senders_start, senders_len]
+    mul                         // [senders_len_by_word, senders_start, senders_start, senders_len]
+    [ONE_WORD_SIZE]             // [word_size, senders_len_by_word, senders_start, senders_start, senders_len]
+    add                         // [senders_offset, senders_start, senders_start, senders_len]
     add                         // [receivers_start, senders_start, senders_len]
     swap1                       // [senders_start, receivers_start, senders_len]
 }
@@ -238,8 +255,9 @@
     [CD_HOST_PTR]           // [host_ptr, value, arg_offset, arg_size, ret_offset, ret_size, senders_i, receivers_i, i]
     calldataload            // [host, value, arg_offset, arg_size, ret_offset, ret_size, senders_i, receivers_i, i]
     gas                     // [gas, host, value, arg_offset, arg_size, ret_offset, ret_size, senders_i, receivers_i, i]
+
     call                    // [success, senders_i, receivers_i, i]
-    
+
     // tolerate liquidation failures.
     pop                     // [senders_i, receivers_i, i]
 }
@@ -302,7 +320,9 @@
         // jump to loop start if there are moor liquidations
         dup3                // [i, senders_i, receivers_i, i]
         liquidation_loop    // [loop_dest, i, senders_i, receivers_i, i]
-        jumpi
+        jumpi               // [senders_i, receivers_i, i]
+
+    // you can't make me pop shit.
 
     // else return
     [ZERO] dup1 return

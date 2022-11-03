@@ -9,3 +9,8 @@ out/
 
 # Dotenv file
 .env
+
+# Node hell.
+node_modules
+*.log
+yarn.lock
