@@ -1,0 +1,309 @@
+// -----------------------------------------------------------------------------
+// SUPERFLUID LIQUIDATOR CONTRACT
+
+// conforms to the BatchLiquidator interface for superfluid-sentinels
+// https://github.com/superfluid-finance/protocol-monorepo/blob/dev/packages/ethereum-contracts/contracts/utils/BatchLiquidator.sol
+
+// -----------------------------------------------------------------------------
+// CALLDATA LAYOUT
+
+// 0x0000 : <deleteFlows_selector>
+// 0x0004 : <host_address>
+// 0x0024 : <cfa_address>
+// 0x0044 : <super_token_address>
+// 0x0064 : <senders_array_pointer>
+// 0x0084 : <receivers_array_pointer>
+// 0x00a4 : <senders_array_length>
+// 0x00c4 : <senders_array_start>
+// ...
+// 0xn4 : <receivers_array_length>
+// 0xn4 : <receivers_array_start>
+
+// -----------------------------------------------------------------------------
+// MEMORY LAYOUT
+
+// During Liquidations
+
+// 0x0000 : <callAgreement_selector>
+// 0x0004 : <cfa_address>
+// 0x0024 : <agreement_data_pointer>
+// 0x0044 : <user_data_pointer>
+// 0x0064 : <agreement_data_length>
+// 0x0084 : <deleteFlow_selector>
+// 0x0088 : <super_token_address>
+// 0x00a8 : <sender_address>
+// 0x00c8 : <receiver_address>
+// 0x00e8 : <ctx_placeholder_ptr>
+// 0x0108 : <zero_slot>
+
+// During BalanceOf
+
+// 0x00 : <balanceOf_selector>
+// 0x04 : <this_address>
+// 0x24 : <balanceOf_returndata>
+
+// During Transfer
+// 0x00 : <transfer_selector>
+// 0x04 : <msg_sender_address>
+// 0x24 : <balanceOf_returndata>
+
+// -----------------------------------------------------------------------------
+// ABI
+
+#define function deleteFlows(address, address, address, address[], address[]) external returns ()
+
+// -----------------------------------------------------------------------------
+// CONSTANTS
+
+// utils
+#define constant ZERO = 0x00
+#define constant ONE = 0x01
+#define constant ONE_WORD_SIZE = 0x20
+#define constant TWO_WORD_SIZE = 0x40
+
+// selectors
+#define constant CALL_AGREEMENT = 0x39255d5b00000000000000000000000000000000000000000000000000000000
+#define constant DELETE_FLOW    = 0xb4b333c600000000000000000000000000000000000000000000000000000000
+#define constant BALANCE_OF     = 0x70a0823100000000000000000000000000000000000000000000000000000000
+#define constant TRANSFER       = 0xa9059cbb00000000000000000000000000000000000000000000000000000000
+
+// calldata pointers
+#define constant CD_HOST_PTR = 0x04
+#define constant CD_CFA_PTR = 0x24
+#define constant CD_SUPER_TOKEN_PTR = 0x44
+#define constant CD_SENDERS_ARRAY_LEN_PTR = 0xa4
+#define constant CD_SENDER_ARRAY_START_PTR = 0xc4
+
+// liquidation memory pointers
+#define constant LIQ_CALL_AGREEMENT_PTR = 0x00
+#define constant LIQ_CFA_PTR = 0x04
+#define constant LIQ_AGREEMENT_DATA_OFFSET_PTR = 0x24
+#define constant LIQ_USER_DATA_OFFSET_PTR = 0x44
+#define constant LIQ_AGREEMENT_DATA_LEN_PTR = 0x64
+#define constant LIQ_DELETE_FLOW_PTR = 0x84
+#define constant LIQ_SUPER_TOKEN_PTR = 0x88
+#define constant LIQ_SENDER_PTR = 0xa8
+#define constant LIQ_RECEIVER_PTR = 0xc8
+#define constant LIQ_CTX_OFFSET_PTR = 0xe8
+#define constant LIQ_CTX_PLACEHOLDER_LEN_PTR = 0x0108
+#define constant LIQ_USER_DATA_LEN_PTR = 0x0128
+
+#define constant LIQ_AGREEMENT_DATA_LEN = 0x84
+
+#define constant LIQ_ARGS_SIZE = 0x148
+
+// balanceOf memory pointers
+#define constant BAL_BALANCE_OF_PTR = 0x00
+#define constant BAL_ACCOUNT_PTR = 0x04
+#define constant BAL_ARGS_PTR = 0x00
+#define constant BAL_ARGS_SIZE = 0x24
+#define constant BAL_RET_PTR = 0x24
+#define constant BAL_RET_SIZE = 0x20
+
+// transfer memory pointers
+#define constant TRA_TRANSFER_PTR = 0x00
+#define constant TRA_RECEIVER_PTR = 0x04
+#define constnat TRA_ARGS_PTR = 0x00
+#define constant TRA_ARGS_SIZE = 0x44
+
+// -----------------------------------------------------------------------------
+// MACROS
+
+#define macro LIQUIDATION_ALLOC = takes (0) returns (0) {
+    [CALL_AGREEMENT]                // [selector]
+    [LIQ_CALL_AGREEMENT_PTR]        // [ptr, selector]
+    mstore                          // []
+
+    [CD_CFA_PTR]                    // [cd_cfa_offset]
+    calldataload                    // [cfa]
+    [LIQ_CFA_PTR]                   // [ptr, cfa]
+    mstore                          // []
+
+    [LIQ_AGREEMENT_DATA_LEN_PTR]    // [agreement_data_start]
+    [LIQ_AGREEMENT_DATA_OFFSET_PTR] // [ptr, agreement_data_start]
+    mstore                          // []
+
+    [LIQ_USER_DATA_LEN_PTR]         // [user_data_start]
+    [LIQ_USER_DATA_OFFSET_PTR]      // [ptr, user_data_start]
+    mstore                          // []
+
+    [LIQ_AGREEMENT_DATA_LEN]        // [agreement_data_len]
+    [LIQ_AGREEMENT_DATA_LEN_PTR]    // [ptr, agreement_data_len]
+    mstore                          // []
+
+    [DELETE_FLOW]                   // [selector]
+    [LIQ_DELETE_FLOW_PTR]           // [ptr, selector]
+    mstore                          // []
+
+    // we omit the sender and receiver slots for now.
+    // these change on each iteration, therefore cannot be cached.
+
+    [ONE_WORD_SIZE]                 // [word_size]
+    [LIQ_CTX_OFFSET_PTR]            // [ptr, word_size]
+    mstore                          // []
+
+    // we probably don't need this. `mload` will expand memory, so this ensures
+    // memory is expanded to the proper length. this saves `mstore` calls that
+    // just store zero. dumb optimization and might be able to remove but ya
+    // know.. yolo.
+    [LIQ_USER_DATA_LEN_PTR]
+    mload
+    pop
+}
+
+#define macro BALANCE_OF_ALLOC() = takes (0) returns (0) {
+    [BALANCE_OF]            // [selector]
+    [BAL_BALANCE_OF_PTR]    // [ptr, selector]
+    mstore                  // []
+
+    caller                  // [caller]
+    [BAL_ACCOUNT_PTR]       // [ptr, caller]
+    mstore                  // []
+}
+
+#define macro TRANSFER_ALLOC() = takes (0) returns (0) {
+    [TRANSFER]              // [selector]
+    [TRA_TRANSFER_PTR]      // [ptr, selector]
+    mstore                  // []
+
+    // we have to rewrite this because the transfer selector will overwrite some
+    // of the caller address.
+    caller                  // [caller]
+    [TRA_RECEIVER_PTR]      // [ptr, caller]
+    mstore                  // []
+
+    // balance will be directly copied by the balanceOf called.
+}
+
+#define macro INIT_ITERATORS() = takes (0) returns (3) {
+    // get iterator to decrement
+    [CD_ARRAY_LEN_PTR]          // [senders_len_ptr]
+    calldataload                // [senders_len]
+
+    // get senders array start
+    [CD_SENDER_ARRAY_START_PTR]    // [senders_start, senders_len]
+
+    // get receivers arary start
+    dup1                        // [senders_start, senders_start, senders_len]
+    dup3                        // [senders_len, senders_start, senders_start, senders_len]
+    [ONE_WORD_SIZE]             // [word_size, senders_len, senders_start, senders_start, senders_len]
+    mul                         // [senders_word_len, senders_start, senders_start, senders_len]
+    add                         // [receivers_start, senders_start, senders_len]
+    swap1                       // [senders_start, receivers_start, senders_len]
+}
+
+#define macro UPDATE_ITERATORS() = takes (3) returns (3) {
+    // takes:           // [senders_i, receivers_i, i]
+
+    // update senders iterator
+    [ONE_WORD_SIZE]     // [word_size, senders_i, receivers_i, i]
+    add                 // [new_senders_i, receivers_i, i]
+
+    // update receivers iterator
+    swap1               // [receivers_i, new_senders_i, i]
+    [ONE_WORD_SIZE]     // [word_size, receivers_i, new_senders_i, i]
+    add                 // [new_receivers_i, new_senders_i, i]
+    swap1               // [new_senders_i, new_receivers_i, i]
+
+    // update iterator
+    swap2               // [i, new_receivers_i, new_senders_i]
+    [ONE]               // [one, i, new_receivers_i, new_senders_i]
+    swap1               // [i, one, new_receivers_i, new_senders_i]
+    sub                 // [new_i, new_receivers_i, new_senders_i]
+    swap2               // [new_senders_i, new_receivers_i, new_i]
+}
+
+#define macro LIQUIDATE() = takes (3) returns (3) {
+    // takes:               // [senders_i, receivers_i, i]
+
+    // store sender in memory
+    dup1                    // [senders_i, senders_i, receivers_i, i]
+    calldataload            // [sender, senders_i, receivers_i, i]
+    [LIQ_SENDER_PTR]        // [sender_ptr, sender, senders_i, receivers_i, i]
+    mstore                  // [senders_i, receivers_i, i]
+
+    // store receiver in memory
+    dup2                    // [receivers_i, senders_i, receivers_i, i]
+    calldataload            // [receiver, senders_i, receivers_i, i]
+    [LIQ_RECEIVER_PTR]      // [receiver_ptr, receiver, senders_i, receivers_i, i]
+    mstore                  // [senders_i, receivers_i, i]
+
+    // make liquidation call
+    [ZERO]                  // [ret_size, senders_i, receivers_i, i]
+    dup1                    // [ret_offset, ret_size, senders_i, receivers_i, i]
+    [LIQ_ARGS_SIZE]         // [arg_size, ret_offset, ret_size, senders_i, receivers_i, i]
+    dup2                    // [arg_offset, arg_size, ret_offset, ret_size, senders_i, receivers_i, i]
+    dup1                    // [value, arg_offset, arg_size, ret_offset, ret_size, senders_i, receivers_i, i]
+    // TODO: maybe cache the host once to avoid calldataloads.. saves like 6 gas per call
+    [CD_HOST_PTR]           // [host_ptr, value, arg_offset, arg_size, ret_offset, ret_size, senders_i, receivers_i, i]
+    calldataload            // [host, value, arg_offset, arg_size, ret_offset, ret_size, senders_i, receivers_i, i]
+    gas                     // [gas, host, value, arg_offset, arg_size, ret_offset, ret_size, senders_i, receivers_i, i]
+    call                    // [success, senders_i, receivers_i, i]
+    
+    // tolerate liquidation failures.
+    pop                     // [senders_i, receivers_i, i]
+}
+
+#define macro DRAIN_BALANCE() = takes (0) returns (0) {
+    // get super token
+    [CD_SUPER_TOKEN_PTR]    // [token_ptr]
+    calldataload            // [token]
+
+    // allocate memory
+    BALANCE_OF_ALLOC()      // [token]
+
+    // make balance call
+    [BAL_RET_SIZE]          // [ret_size, token]
+    [BAL_RET_PTR]           // [ret_ptr, ret_size, token]   
+    [BAL_ARGS_SIZE]         // [arg_size, ret_ptr, ret_size, token]
+    [BAL_ARGS_PTR]          // [arg_ptr, arg_size, ret_ptr, ret_size, token]
+    dup6                    // [token, arg_ptr, arg_size, ret_ptr, ret_size, token]
+    gas                     // [gas, token, arg_ptr, arg_size, ret_ptr, ret_size, token]
+    staticcall              // [success, token]
+
+    // yolo m8
+    pop                     // [token]
+
+    // alloc memory
+    TRANSFER_ALLOC()        // [token]
+    [ZERO]                  // [ret_size, token]
+    dup1                    // [ret_offset, ret_size, token]
+    [TRA_ARGS_SIZE]         // [arg_size, ret_offset, ret_size, token]
+    [TRA_ARGS_PTR]          // [arg_offset, arg_size, ret_offset, ret_size, token]
+    dup3                    // [value, arg_offset, arg_size, ret_offset, ret_size, token]
+    dup6                    // [token, value, arg_offset, arg_size, ret_offset, ret_size, token]
+    gas                     // [gas, token, value, arg_offset, arg_size, ret_offset, ret_size, token]
+    call                    // [success, token]
+
+    // yolo m8
+    pop                     // [token]
+    pop                     // []
+    [ZERO] dup1 return      // []
+}
+
+#define macro MAIN() = takes (0) returns (0) {
+    // we assume you're calling the right function
+    // we assume you're not sending ether to this contract
+    // we assume you're encoding your arguments correctly
+    // we assume the lengths of the sender and receiver arrays are equal
+    // we assume you have your shit together
+
+    // allocate memory
+    LIQUIDATION_ALLOC()     // []
+
+    // init iterators
+    INIT_ITERATORS()        // [senders_i, receivers_i, i]
+
+    // start looping this sheit
+    liquidation_loop:       // [senders_i, receivers_i, i]
+        LIQUIDATE()         // [senders_i, receivers_i, i]
+        UPDATE_ITERATORS()  // [senders_i, receivers_i, i]
+
+        // jump to loop start if there are moor liquidations
+        dup3                // [i, senders_i, receivers_i, i]
+        liquidation_loop    // [loop_dest, i, senders_i, receivers_i, i]
+        jumpi
+
+    // else return
+    [ZERO] dup1 return
+}
